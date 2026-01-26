@@ -65,13 +65,14 @@ hads_2yr$progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y = as.factor(hads_2
 hads_2yr$geslacht = as.factor(hads_2yr$geslacht)
 ```
 
+Creating a subset for sensitivity analysis (13 patients with incomplete data were removed)
+```{r}
+ids = c("to_be_removed__patient_id")
+hads_1yr_sens = subset(hads_1yr, !hads_1yr$`Participant Id` %in% ids)
+hads_2yr_sens = subset(hads_2yr, !hads_2yr$`Participant Id` %in% ids)
+```
+
 ## step 3: logistic-regression prediction model
-
-Option1: in-sample AUC, downside is overestimates performance, doesn't reflect how well the model would predict based on new data, maybe overfitting, but not reliable for comparing models
-Option2: train-test AUC, split the datasets 
-Option3: cross-validated AUC, average the AUCs to give a more robust and honest estimate of model performance, recommended for small datasets
-
-Cosidering our small sample size, we decided to use bootstrap of the cross-validation process then compare the average AUCs.
 
 ### cross-validation AUC
 bootstrap the cross-validation process: bootstrapping of the dataset, for each bootstrap sample, runs k-fold cross-validation, calculates the mean AUC-ROC across the folds, repeating this for all bootstrap samples to get a distribution of mean AUCs and to compute confidence intervals for the average cross-validated AUC
@@ -79,13 +80,18 @@ bootstrap the cross-validation process: bootstrapping of the dataset, for each b
 #### function 1: Bootstrap of k-fold CV
 ```{r}
 # function to perform bootstrap of k-fold CV and get out-of-fold predictions during CV
-cv_auc = function(data, response_var, predictors, k = k, B = B){
+cv_auc = function(data, response_var, predictors, k, B){
   
   all_roc_curves <- list()
   all_preds = data.frame() # to collect raw obs and pred
   
   coef_list = list() # to collect coefficients
   
+  perf_metrics = list() # to collect sensitivity, specificity, PPV, NPV
+  
+  # set FPR grid to interpolate all ROC curves to the same set of FPR values to compute mean TPR and 95% CIs
+  fpr_grid <- seq(0, 1, length.out = 100)  
+
   for (b in 1:B){
   
   # subset the data for bootstrap sample
@@ -125,8 +131,62 @@ cv_auc = function(data, response_var, predictors, k = k, B = B){
    preds$response = response_var
    preds$auc = auc(roc_obj)
    all_preds = rbind(all_preds, preds)
-   
 }
+  # calculate mean coefficients
+  coef_matrix = do.call(rbind, coef_list)
+  
+  coef_summary = as.data.frame(coef_matrix) %>%
+    summarise(across(everything(), mean)) # or use median or cloest to mean
+  
+  ## recode raw predictions to 0/1, 2 = 1, 1 = 0
+  all_preds = all_preds %>% mutate(obs_bin = ifelse(obs == 2, 1, 0))
+  
+  # apply thresholds (predicted probability test different thresholds) to all_preds per bootstrap
+  thresholds = c(0.1, 0.3, 0.5, 0.7)
+  
+  for (j in 1:length(thresholds)) {
+    all_preds_threshold = all_preds %>% 
+    group_by(bootstrap) %>%
+    mutate(pred_class = ifelse(pred >= thresholds[j], 1, 0),
+           threshold = thresholds[j]) %>% 
+    ungroup()
+    
+    metric_list = all_preds_threshold %>% 
+    group_by(bootstrap) %>%
+    summarise(
+      TP = sum(pred_class == 1 & obs_bin == 1),
+      FP = sum(pred_class == 1 & obs_bin == 0),
+      TN = sum(pred_class == 0 & obs_bin == 0),
+      FN = sum(pred_class == 0 & obs_bin == 1),
+      .groups = "drop") %>%
+    mutate(
+      sensitivity = TP / (TP + FN),
+      specificity = TN / (TN + FP),
+      PPV = TP / (TP + FP),
+      NPV = TN / (TN + FN)
+    )
+    
+    # summarize mean and 95% CI across bootstraps
+    perf_metrics[[j]] = metric_list %>% 
+    summarise(
+    threshold = thresholds[j],
+    response = response_var,
+    sensitivity_mean = mean(sensitivity, na.rm=TRUE),
+    sensitivity_lower = quantile(sensitivity, 0.025, na.rm=TRUE),
+    sensitivity_upper = quantile(sensitivity, 0.975, na.rm=TRUE),
+    specificity_mean = mean(specificity, na.rm=TRUE),
+    specificity_lower = quantile(specificity, 0.025, na.rm=TRUE),
+    specificity_upper = quantile(specificity, 0.975, na.rm=TRUE),
+    PPV_mean = mean(PPV, na.rm=TRUE),
+    PPV_lower = quantile(PPV, 0.025, na.rm=TRUE),
+    PPV_upper = quantile(PPV, 0.975, na.rm=TRUE),
+    NPV_mean = mean(NPV, na.rm=TRUE),
+    NPV_lower = quantile(NPV, 0.025, na.rm=TRUE),
+    NPV_upper = quantile(NPV, 0.975, na.rm=TRUE))
+  }
+  
+  perf_metrics = do.call(rbind, perf_metrics)
+  
   # combine interpolated TPRs to data frame
   roc_matrix = do.call(rbind, all_roc_curves)
   roc_df = as.data.frame(roc_matrix)
@@ -141,51 +201,13 @@ cv_auc = function(data, response_var, predictors, k = k, B = B){
            FPR = fpr_grid[col_index],
            response = response_var) 
   
-  # calculate mean coefficients
-  coef_matrix = do.call(rbind, coef_list)
-  
-  coef_summary = as.data.frame(coef_matrix) %>%
-    summarise(across(everything(), mean)) # or use median or cloest to mean
-  
-  return(list(roc_long = long_df, raw_preds = all_preds, coef_matrix = coef_matrix, coef_summary = coef_summary))
-}
-```
-
-#### function 2: mean model from cross-validation process for plotting
-```{r}
-# final mean model and plotting
-optimization_plot = function(df, response_var, predictors, coef_matrix, coef_summary){
-  
-  # build a model here and replace coefficients with mean coefficients
-  formula_str = paste(response_var, "~", paste0(predictors[1], "+", predictors[2]))
-    
-  mean_model = glm(as.formula(formula_str), data = df, family = binomial())
-  
-  # replace coefficients with averaged ones
-  mean_model$coefficients = as.numeric(coef_summary)
-  
-  # calculate odds ratios of mean model 
-  OR = exp(coef(mean_model))
-  
-  # compute OR CIs from bootstrapped coefficients
-  CIs = apply(coef_matrix, 2, function(x) exp(quantile(x, probs = c(0.025, 0.975))))
-  
-  or_ci = cbind(OR, CIs)
-  or_df = data.frame(odds_ratio = OR[2],
-                     CI2.5 = CIs[1,2],
-                     CI97.5 = CIs[2,2],
-                     response = response_var)
-  
-  return(list(or_df = or_df))
+  return(list(roc_long = long_df, raw_preds = all_preds, coef_matrix = coef_matrix, coef_summary = coef_summary, perf_metrics = perf_metrics))
 }
 ```
 
 #### run the bootstrp of CV
 The bootstrap of CV was run with year 1 and year 2 data and were used to produce Figure 3C-H
 ```{r fig.height=10, fig.width=15, message=FALSE, warning=FALSE}
-# set FPR grid to interpolate all ROC curves to the same set of FPR values to compute mean TPR and 95% CIs
-fpr_grid <- seq(0, 1, length.out = 100)  
-
 # run bootstrap - get CV predictions for each response
 responses1 = c("edss_progression", 
                "progression_edss_or_T25FW_or_AMSQ", 
@@ -194,13 +216,15 @@ responses2 = c("edss_progression_2",
                "progression_edss_or_T25FW_or_AMSQ_2y", 
                "progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y")
 
-predictors1 = c("hads_angst", "offset(log10(age_at_prev_visit))" )
-predictors2 = c("hads_depressie", "offset(log10(age_at_prev_visit))" )
-predictors3 = c("hads_totaal", "offset(log10(age_at_prev_visit))")
+predictors1 = c("hads_angst", "age_at_prev_visit" )
+predictors2 = c("hads_depressie", "age_at_prev_visit" )
+predictors3 = c("hads_totaal", "age_at_prev_visit")
 
 combo = list(c(responses1, predictors1), c(responses1, predictors2), c(responses1, predictors3),
              c(responses2, predictors1), c(responses2, predictors2), c(responses2, predictors3))
 names = c("y1_hads_angst", "y1_hads_depressie", "y1_hads_totaal","y2_hads_angst", "y2_hads_depressie", "y2_hads_totaal")
+
+# names = c("y1_hads_angst_sens", "y1_hads_depressie_sens", "y1_hads_totaal_sens", "y2_hads_angst_sens", "y2_hads_depressie_sens", "y2_hads_totaal_sens")
 
 for (i in 1:length(combo)){
   
@@ -221,7 +245,22 @@ for (i in 1:length(combo)){
     }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
   }
   
-  ## step 2: calculate mean ROCs + CI for visualization
+  # ### for senstivity analysis without certain patients
+  #  if ("edss_progression" %in% responses){
+  #   results <- lapply(responses, function(resp) {
+  #     cv_auc(hads_1yr_sens, resp, predictors, B = 100, k = 5)
+  #   }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
+  # } else{
+  #   results <- lapply(responses, function(resp) {
+  #     cv_auc(hads_2yr_sens, resp, predictors, B = 100, k = 5)
+  #   }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
+  # }
+  
+  ## step 2: extract the performance metrics for supplementary
+  perf_metrics_combined = bind_rows(lapply(results, function(x) x$perf_metrics))
+  write.csv(perf_metrics_combined, paste0(outDir, name, "_performance_metrics.csv"))
+  
+  ## step 3: calculate mean ROCs + CI for visualization
   # combine ROC data and prediction data
   roc_data_combined = bind_rows(lapply(results, function(x) x$roc_long))
   all_preds_combined = bind_rows(lapply(results, function(x) x$raw_preds))
@@ -236,17 +275,22 @@ for (i in 1:length(combo)){
     .groups = "drop"
     )
   
-  # comupte AUCs per response then calculate statistical difference with anova
+  # comupte AUCs per response then calculate statistical difference with lme model and posthoc test
   auc_df <- all_preds_combined %>%
     group_by(response,bootstrap) %>%
     summarise(
     auc = as.numeric(pROC::auc(obs, pred, quiet = TRUE)),
     .groups = "drop") # normally distributted
   
-  aov_auc = aov(auc ~ response, data = auc_df)
-  aov_auc_df = TukeyHSD(aov_auc)$response %>% as.data.frame()
+  auc_df$response = factor(auc_df$response)
+  auc_df$bootstrap = factor(auc_df$bootstrap)
   
-  # write.csv(aov_auc_df, paste0(outDir, name, "_auc_statistics.csv"))
+  lmm = lmer(auc ~ response + (1 | bootstrap), data = auc_df)
+  emm = emmeans(lmm, ~ response)
+  
+  pairwise_auc = contrast(emm, method = "pairwise", adjust = "tukey")%>% as.data.frame()
+  
+  write.csv(pairwise_auc, paste0(outDir, name, "_auc_statistics.csv"))
   
   # compute AUC summary
   auc_summary <- all_preds_combined %>%
@@ -294,36 +338,11 @@ for (i in 1:length(combo)){
         legend.title = element_blank())
   
   # output the mean ROCs
-  # pdf(file = paste0(outDir, name, "_mean_roc_with_CI.pdf"), width = 15, height = 10) 
+  pdf(file = paste0(outDir, name, "_mean_roc_with_CI.pdf"), width = 15, height = 10) 
   
   plot(p1)
   
-  # dev.off()
-  
-  ## step 3: visualize the average model
-  # mean coefficients for each model
-  all_coef_matrix = lapply(results, function(x) x$coef_matrix)
-  all_coef_summary = lapply(results, function(x) x$coef_summary)
-  
-  results2 <- list()
-
-  for (i in 1:length(responses)) {
-  cat("Processing response:", responses[i], "\n")
-    
-  if ("edss_progression" %in% responses){
-    res <- optimization_plot(hads_1yr, responses[i], predictors, all_coef_matrix[[i]], all_coef_summary[[i]])
-  } else{
-    res <- optimization_plot(hads_2yr, responses[i], predictors, all_coef_matrix[[i]], all_coef_summary[[i]])
-  }
-  
-  results2[[i]] <- list(
-    or_df = res$or_df
-  )
-  }
-  
-  # output the dataframe with odds ratio
-  odds_ratio_df = bind_rows(lapply(results2, function(x) x$or_df))
-  # write.csv(odds_ratio_df, paste0(outDir, name, "_mean_model_odds_ratio.csv"))
+  dev.off()
 }
 ```
 
@@ -461,19 +480,16 @@ plot((Boruta_yr2$plot1 | Boruta_yr2$plot2))
 ## step 5: remodel with boruta selcted feature
 hads question 8 and 6 are most important, we check how well these questions alone can predict disease progression.
 The bootstrap of CV was run with year 2 data with only hads 6 and/or 8 as predictors and were used to produce Figure 4C-D
-```{r message=FALSE, warning=FALSE}
+```{r}
 hads_2yr$hads_8_6 = hads_2yr$hads_8 + hads_2yr$hads_6
-
-# set FPR grid to interpolate all ROC curves to the same set of FPR values to compute mean TPR and 95% CIs
-fpr_grid <- seq(0, 1, length.out = 100)  
 
 # run bootstrap - get CV predictions for each response
 responses2 = c("edss_progression_2", 
                "progression_edss_or_T25FW_or_AMSQ_2y", 
                "progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y")
 
-predictors4 = c("hads_8", "offset(log10(age_at_prev_visit))" )
-predictors5 = c("hads_8_6", "offset(log10(age_at_prev_visit))" )
+predictors4 = c("hads_8", "age_at_prev_visit" )
+predictors5 = c("hads_8_6", "age_at_prev_visit" )
 
 combo = list(c(responses2, predictors4), c(responses2, predictors5))
 names = c("y2_hads_8", "y2_hads_8_6")
@@ -486,7 +502,7 @@ for (i in 1:length(combo)){
   
   name = names[i]
   
-  ## step 1: run bootstrap of cross validation process
+  # step 1: run bootstrap of cross validation process
   if ("edss_progression" %in% responses){
     results <- lapply(responses, function(resp) {
       cv_auc(hads_1yr, resp, predictors, B = 100, k = 5)
@@ -497,7 +513,11 @@ for (i in 1:length(combo)){
     }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
   }
   
-  ## step 2: calculate mean ROCs + CI for visualization
+  ## step 2: extract the performance metrics for supplementary
+  perf_metrics_combined = bind_rows(lapply(results, function(x) x$perf_metrics))
+  write.csv(perf_metrics_combined, paste0(outDir, name, "_performance_metrics.csv"))
+  
+  ## step 3: calculate mean ROCs + CI for visualization
   # combine ROC data and prediction data
   roc_data_combined = bind_rows(lapply(results, function(x) x$roc_long))
   all_preds_combined = bind_rows(lapply(results, function(x) x$raw_preds))
@@ -512,17 +532,22 @@ for (i in 1:length(combo)){
     .groups = "drop"
     )
   
-  # comupte AUCs per response then calculate statistical difference with anova
+  # comupte AUCs per response then calculate statistical difference with lme model and posthoc test
   auc_df <- all_preds_combined %>%
     group_by(response,bootstrap) %>%
     summarise(
     auc = as.numeric(pROC::auc(obs, pred, quiet = TRUE)),
     .groups = "drop") # normally distributted
   
-  aov_auc = aov(auc ~ response, data = auc_df)
-  aov_auc_df = TukeyHSD(aov_auc)$response %>% as.data.frame()
+  auc_df$response = factor(auc_df$response)
+  auc_df$bootstrap = factor(auc_df$bootstrap)
   
-  # write.csv(aov_auc_df, paste0(outDir, name, "_auc_statistics.csv"))
+  lmm = lmer(auc ~ response + (1 | bootstrap), data = auc_df)
+  emm = emmeans(lmm, ~ response)
+  
+  pairwise_auc = contrast(emm, method = "pairwise", adjust = "tukey")%>% as.data.frame()
+  
+  write.csv(pairwise_auc, paste0(outDir, name, "_auc_statistics.csv"))
   
   # compute AUC summary
   auc_summary <- all_preds_combined %>%
@@ -538,7 +563,7 @@ for (i in 1:length(combo)){
     upper_auc = quantile(auc, 0.975)
   )
 
-  # Plot mean ROC curves with CI ribbons
+  # Plot mean ROC curves with CI ribbons - Figure 3C-H
   roc_summary_auc = merge(roc_summary, auc_summary, by = "response")
   roc_summary_auc$response_label = case_when(roc_summary_auc$response  %in% c("edss_progression", 
                                                                               "edss_progression_2") ~ "edss model",
@@ -550,7 +575,7 @@ for (i in 1:length(combo)){
   roc_summary_auc$label = paste(roc_summary_auc$response_label, ": AUC = ", round(roc_summary_auc$mean_auc, 3),
                           " (95% CI: ", round(roc_summary_auc$lower_auc, 3), "-", round(roc_summary_auc$upper_auc, 3), ")")
 
-  ## Figure 4C-D
+  ## ## Figure 4C-D
   p1 = ggplot(roc_summary_auc, aes(x = FPR, y = mean_TPR, color = label, fill = label)) +
   geom_step(size = 1.2) +
   geom_ribbon(aes(ymin = lower_TPR, ymax = upper_TPR), alpha = 0.2, color = NA) +
@@ -570,36 +595,11 @@ for (i in 1:length(combo)){
         legend.title = element_blank())
   
   # output the mean ROCs
-  # pdf(file = paste0(outDir, name, "_mean_roc_with_CI.pdf"), width = 15, height = 10) 
+  pdf(file = paste0(outDir, name, "_mean_roc_with_CI.pdf"), width = 15, height = 10) 
   
   plot(p1)
   
-  # dev.off()
-  
-  ## step 3: visualize the average model
-  # mean coefficients for each model
-  all_coef_matrix = lapply(results, function(x) x$coef_matrix)
-  all_coef_summary = lapply(results, function(x) x$coef_summary)
-  
-  results2 <- list()
-
-  for (i in 1:length(responses)) {
-  cat("Processing response:", responses[i], "\n")
-    
-  if ("edss_progression" %in% responses){
-    res <- optimization_plot(hads_1yr, responses[i], predictors, all_coef_matrix[[i]], all_coef_summary[[i]])
-  } else{
-    res <- optimization_plot(hads_2yr, responses[i], predictors, all_coef_matrix[[i]], all_coef_summary[[i]])
-  }
-  
-  results2[[i]] <- list(
-    or_df = res$or_df 
-  )
-  }
-  
-  # output the dataframe with odds ratio
-  odds_ratio_df = bind_rows(lapply(results2, function(x) x$or_df))
-  # write.csv(odds_ratio_df, paste0(outDir, name, "_mean_model_odds_ratio.csv"))
+  dev.off()
 }
 ```
 
