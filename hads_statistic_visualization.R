@@ -253,6 +253,278 @@ baseline_table_progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS <-
 # View
 baseline_table_progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS
 
+## CREATE BASELINE TABLE TO COMPARE PEOPLE WITH 2-3 AVAILABLE VARIABLES TO THOSE WITH 4-5 AVAILABLE VARIABLES WITHIN THE NON-PROGRESSION GROUP AND TO THE 5var PROGRESSORS ##
+library(dplyr)
+library(gtsummary)
+
+# Step 1: Create a clean dataset of people divided in three subgroups (non-progressors with 2-3 progression variables available, non-progressors with 4-5 variables available and progressors on the 5-variable composite) 
+merged_data_base <- merged_data_1F %>%
+  mutate(
+    n_progressie_available = 
+      1 +  # EDSS always available
+      1 +  # PDDS always available
+      as.integer(T25FW_boxplotgroep != "Ontbrekend") +
+      as.integer(AMSQ_progressie_boxplot != "Ontbrekend") +
+      as.integer(SDMT_progressie_boxplot != "Ontbrekend"),
+    
+    subgroup_progressiecompleetheid = case_when(
+      progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS == 1 ~
+        "Progression (5-variable composite)",
+      
+      progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS == 0 &
+        n_progressie_available %in% 2:3 ~
+        "2–3 variables available (no progression)",
+      
+      progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS == 0 &
+        n_progressie_available %in% 4:5 ~
+        "4–5 variables available (no progression)",
+      
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(subgroup_progressiecompleetheid))
+
+# Step 2: Custom function for HADS scores with type=1 quantiles and rounding
+.make_hads_str_t1 <- function(x) {
+  x <- x[!is.na(x)]
+  if (!length(x)) return("—")
+  q <- function(p) stats::quantile(x, probs = p, na.rm = TRUE, type = 1)
+  m <- round(q(0.5))
+  q1 <- round(q(0.25))
+  q3 <- round(q(0.75))
+  sprintf("%d (%d, %d)", m, q1, q3)
+}
+
+.get_grouped_hads_summaries <- function(varname, data) {
+  var <- data[[varname]]
+  g <- data$subgroup_progressiecompleetheid
+  levs <- levels(g)
+  
+  list(
+    overall = .make_hads_str_t1(var),
+    g1 = .make_hads_str_t1(var[g == levs[1]]),
+    g2 = .make_hads_str_t1(var[g == levs[2]])
+  )
+}
+
+# Step 3: Prepare non-progressor data for 2–3 vs 4–5 variables available
+nonprog_data <- merged_data_base %>%
+  filter(subgroup_progressiecompleetheid != "Progression (5-variable composite)") %>%
+  mutate(
+    subgroup_progressiecompleetheid = factor(
+      subgroup_progressiecompleetheid,
+      levels = c(
+        "2–3 variables available (no progression)",
+        "4–5 variables available (no progression)"
+      )
+    )
+  )
+
+.hads_totaal_vals <- .get_grouped_hads_summaries("hads_totaal", nonprog_data)
+.hads_angst_vals  <- .get_grouped_hads_summaries("hads_angst", nonprog_data)
+
+# Step 4: Table non-progressors 2–3 vs 4–5 variables
+tbl_nonprogression_23_vs_45 <- nonprog_data %>%
+  select(
+    geslacht, age_at_prev_visit, 
+    disease_duration_firstsymptoms,
+    prev_edss, prev_immuunMSmedicatie_type,
+    prev_psychofarmaca, prev_antidepressiva, prev_anxiolytica,
+    hads_angst, hads_depressie, hads_totaal,
+    subgroup_progressiecompleetheid
+  ) %>%
+  tbl_summary(
+    by = subgroup_progressiecompleetheid,
+    missing = "ifany",
+    statistic = list(
+      all_categorical() ~ "{n}/{N} ({p}%)",
+      all_continuous() ~ "{median} ({p25}, {p75})"
+    ),
+    type = list(prev_edss ~ "continuous")
+  ) %>%
+  add_overall() %>%
+  add_p(
+    test = list(
+      all_continuous() ~ kruskal.test,
+      all_categorical() ~ fisher.test
+    ),
+    test.args = all_categorical() ~ 
+      list(workspace = 2e8, simulate.p.value = TRUE, B = 1e5)
+  ) %>%
+  modify_table_body(~ .x %>%
+                      relocate(label, stat_0, stat_1, stat_2, p.value) %>%
+                      mutate(across(
+                        starts_with("stat_"),
+                        ~ case_when(
+                          variable == "hads_totaal" ~ case_when(
+                            cur_column() == "stat_0" ~ .hads_totaal_vals$overall,
+                            cur_column() == "stat_1" ~ .hads_totaal_vals$g1,
+                            cur_column() == "stat_2" ~ .hads_totaal_vals$g2,
+                            TRUE ~ .
+                          ),
+                          variable == "hads_angst" ~ case_when(
+                            cur_column() == "stat_0" ~ .hads_angst_vals$overall,
+                            cur_column() == "stat_1" ~ .hads_angst_vals$g1,
+                            cur_column() == "stat_2" ~ .hads_angst_vals$g2,
+                            TRUE ~ .
+                          ),
+                          TRUE ~ .
+                        )
+                      ))
+  ) %>%
+  modify_header(
+    stat_1 = "**2–3 available**",
+    stat_2 = "**4–5 available**",
+    p.value = "**p-value**"
+  ) %>%
+  bold_labels()
+
+# Step 5: Prepare 2–3 non-progressors vs progression (5-variable composite)
+prog_data <- merged_data_base %>%
+  filter(subgroup_progressiecompleetheid != "4–5 variables available (no progression)") %>%
+  mutate(
+    subgroup_progressiecompleetheid = factor(
+      subgroup_progressiecompleetheid,
+      levels = c(
+        "2–3 variables available (no progression)",
+        "Progression (5-variable composite)"
+      )
+    )
+  )
+
+.hads_totaal_vals_prog <- .get_grouped_hads_summaries("hads_totaal", prog_data)
+.hads_angst_vals_prog  <- .get_grouped_hads_summaries("hads_angst", prog_data)
+
+tbl_23_nonprog_vs_prog <- prog_data %>%
+  select(
+    geslacht, age_at_prev_visit, 
+    disease_duration_firstsymptoms,
+    prev_edss, prev_immuunMSmedicatie_type,
+    prev_psychofarmaca, prev_antidepressiva, prev_anxiolytica,
+    hads_angst, hads_depressie, hads_totaal,
+    subgroup_progressiecompleetheid
+  ) %>%
+  tbl_summary(
+    by = subgroup_progressiecompleetheid,
+    missing = "ifany",
+    statistic = list(
+      all_categorical() ~ "{n}/{N} ({p}%)",
+      all_continuous() ~ "{median} ({p25}, {p75})"
+    ),
+    type = list(prev_edss ~ "continuous")
+  ) %>%
+  add_overall() %>%
+  add_p(
+    test = list(
+      all_continuous() ~ kruskal.test,
+      all_categorical() ~ fisher.test
+    ),
+    test.args = all_categorical() ~ 
+      list(workspace = 2e8, simulate.p.value = TRUE, B = 1e5)
+  ) %>%
+  modify_table_body(~ .x %>%
+                      relocate(label, stat_0, stat_1, stat_2, p.value) %>%
+                      mutate(across(
+                        starts_with("stat_"),
+                        ~ case_when(
+                          variable == "hads_totaal" ~ case_when(
+                            cur_column() == "stat_0" ~ .hads_totaal_vals_prog$overall,
+                            cur_column() == "stat_1" ~ .hads_totaal_vals_prog$g1,
+                            cur_column() == "stat_2" ~ .hads_totaal_vals_prog$g2,
+                            TRUE ~ .
+                          ),
+                          variable == "hads_angst" ~ case_when(
+                            cur_column() == "stat_0" ~ .hads_angst_vals_prog$overall,
+                            cur_column() == "stat_1" ~ .hads_angst_vals_prog$g1,
+                            cur_column() == "stat_2" ~ .hads_angst_vals_prog$g2,
+                            TRUE ~ .
+                          ),
+                          TRUE ~ .
+                        )
+                      ))
+  ) %>%
+  modify_header(
+    stat_1 = "**2–3 available (no progression)**",
+    stat_2 = "**Progression**",
+    p.value = "**p-value**"
+  ) %>%
+  bold_labels()
+
+# Step 6: Merge tables
+baseline_table_merged <- tbl_merge(
+  tbls = list(
+    tbl_nonprogression_23_vs_45,
+    tbl_23_nonprog_vs_prog
+  ),
+  tab_spanner = c(
+    "**Non-progression: 2–3 vs 4–5 available variables**",
+    "**2–3 non-progression vs progression**"
+  )
+)
+
+baseline_table_merged
+
+
+# Determine p-values of significance in HADS scores using post-hoc test 
+# on HADS in linear regression model (glm nb)
+# Comparing non-progressors with 2–3 vs 4–5 progression variables available vs progressors
+
+### 1. Fit Negative Binomial GLM
+ # --- 2–3 vs 4–5 non-progressors ---
+ m_angst_23_45 <- glm.nb(hads_angst ~ factor(subgroup_progressiecompleetheid), data = nonprog_data)
+ m_depr_23_45  <- glm.nb(hads_depressie ~ factor(subgroup_progressiecompleetheid), data = nonprog_data)
+ m_tot_23_45   <- glm.nb(hads_totaal ~ factor(subgroup_progressiecompleetheid), data = nonprog_data)
+
+ # --- 2–3 non-progressors vs 5-var progressors ---
+ m_angst_23_prog <- glm.nb(hads_angst ~ factor(subgroup_progressiecompleetheid), data = prog_data)
+ m_depr_23_prog  <- glm.nb(hads_depressie ~ factor(subgroup_progressiecompleetheid), data = prog_data)
+ m_tot_23_prog   <- glm.nb(hads_totaal ~ factor(subgroup_progressiecompleetheid), data = prog_data)
+
+
+### 2. Check model assumptions
+ # --- 2–3 vs 4–5 non-progressors ---
+ check_model(m_angst_23_45)
+ check_model(m_depr_23_45)
+ check_model(m_tot_23_45)
+
+ # --- 2–3 non-progressors vs 5-var progressors ---
+ check_model(m_angst_23_prog)
+ check_model(m_depr_23_prog )
+ check_model(m_tot_23_prog)
+
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+ # --- 2–3 vs 4–5 non-progressors ---
+  # HADS Anxiety
+  emm_angst_23_45 <- emmeans(m_angst_23_45, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_angst_23_45$contrasts
+
+  # HADS Depression
+  emm_depr_23_45  <- emmeans(m_depr_23_45, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_depr_23_45$contrasts
+
+  # HADS Total
+  emm_tot_23_45   <- emmeans(m_tot_23_45, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_tot_23_45$contrasts
+
+ # --- 2–3 non-progressors vs 5-var progressors ---
+  # HADS Anxiety
+  emm_angst_23_prog <- emmeans(m_angst_23_prog, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_angst_23_prog$contrasts
+ 
+  # HADS Depression
+  emm_depr_23_prog  <- emmeans(m_depr_23_prog, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_depr_23_prog$contrasts
+ 
+  # HADS Total
+  emm_tot_23_prog   <- emmeans(m_tot_23_prog, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_tot_23_prog$contrasts
+ 
+ 
+# Print group size
+ table(nonprog_data$subgroup_progressiecompleetheid)
+ table(prog_data$subgroup_progressiecompleetheid)
+
 ###### YEAR 2. Baseline tables ######
 # Calculate descriptive statistics for number of days between prev_visit and next_visit_2
 
@@ -474,6 +746,272 @@ baseline_table_progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y <-
 
 baseline_table_progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y
 
+## CREATE BASELINE TABLE TO COMPARE PEOPLE WITH 2-3 AVAILABLE VARIABLES TO THOSE WITH 4-5 AVAILABLE VARIABLES WITHIN THE NON-PROGRESSION 2-YEAR GROUP AND TO THE 5var PROGRESSORS ##
+# Step 1: Create a clean dataset of people divided in three subgroups for 2-year follow-up (non-progressors with 2-3 progression variables available, non-progressors with 4-5 variables available and progressors on the 5-variable composite) 
+merged_data_base_2y <- merged_data_1F_2y %>%
+  mutate(
+    n_progressie_available = 
+      1 +  # prev_edss always available
+      1 +  # PDDS always available
+      as.integer(T25FW_boxplotgroep_2y != "Ontbrekend") +
+      as.integer(AMSQ_boxplotgroep_2y != "Ontbrekend") +
+      as.integer(SDMT_boxplotgroep_2y != "Ontbrekend"),
+    
+    subgroup_progressiecompleetheid = case_when(
+      progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y == 1 ~
+        "Progression (5-variable composite)",
+      
+      progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y == 0 &
+        n_progressie_available %in% 2:3 ~
+        "2–3 variables available (no progression)",
+      
+      progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y == 0 &
+        n_progressie_available %in% 4:5 ~
+        "4–5 variables available (no progression)",
+      
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(subgroup_progressiecompleetheid))
+
+# Step 2: Custom function for type=1 quantile summaries
+.make_t1_str <- function(x, digits = 1) {
+  x <- x[!is.na(x)]
+  if (!length(x)) return("—")
+  q <- function(p) stats::quantile(x, probs = p, na.rm = TRUE, type = 1)
+  m <- round(q(0.5), digits)
+  q1 <- round(q(0.25), digits)
+  q3 <- round(q(0.75), digits)
+  fmt <- paste0("%.", digits, "f (%.", digits, "f, %.", digits, "f)")
+  sprintf(fmt, m, q1, q3)
+}
+
+.get_grouped_t1_summaries <- function(data, varname, groupvar, levels_vec, digits = 1) {
+  var <- data[[varname]]
+  g <- data[[groupvar]]
+  list(
+    overall = .make_t1_str(var, digits),
+    g1 = if (length(levels_vec) >= 1) .make_t1_str(var[g == levels_vec[1]], digits) else "—",
+    g2 = if (length(levels_vec) >= 2) .make_t1_str(var[g == levels_vec[2]], digits) else "—"
+  )
+}
+
+
+# Step 3: Prepare non-progressor data for 2–3 vs 4–5 variables available
+nonprog_data_2y <- merged_data_base_2y %>%
+  filter(subgroup_progressiecompleetheid != "Progression (5-variable composite)") %>%
+  mutate(
+    subgroup_progressiecompleetheid = factor(
+      subgroup_progressiecompleetheid,
+      levels = c(
+        "2–3 variables available (no progression)",
+        "4–5 variables available (no progression)"
+      )
+    )
+  )
+
+.vars_t1_2y <- c("prev_edss", "hads_angst", "hads_depressie", "hads_totaal")
+.by_levels_2y <- levels(nonprog_data_2y$subgroup_progressiecompleetheid)
+
+.vals_list_2y <- lapply(
+  setNames(.vars_t1_2y, .vars_t1_2y),
+  function(v) {
+    .get_grouped_t1_summaries(
+      nonprog_data_2y, v,
+      "subgroup_progressiecompleetheid", .by_levels_2y,
+      digits = 1
+    )
+  }
+)
+
+# Step 4: Table non-progressors 2–3 vs 4–5 variables
+tbl_nonprogression_23_vs_45_2y <- nonprog_data_2y %>%
+  dplyr::select(
+    geslacht, age_at_prev_visit, 
+    disease_duration_firstsymptoms,
+    prev_edss, prev_immuunMSmedicatie_type,
+    prev_psychofarmaca, prev_antidepressiva, prev_anxiolytica,
+    hads_angst, hads_depressie, hads_totaal,
+    subgroup_progressiecompleetheid
+  ) %>%
+  tbl_summary(
+    by = subgroup_progressiecompleetheid,
+    missing = "ifany",
+    statistic = list(
+      all_categorical() ~ "{n}/{N} ({p}%)",
+      all_continuous() ~ "{median} ({p25}, {p75})"
+    ),
+    type = list(prev_edss ~ "continuous")
+  ) %>%
+  add_overall() %>%
+  add_p(
+    test = list(
+      all_continuous() ~ kruskal.test,
+      all_categorical() ~ fisher.test
+    ),
+    test.args = all_categorical() ~ list(workspace = 2e8, simulate.p.value = TRUE, B = 1e5)
+  ) %>%
+  modify_table_body(~ {
+    tb <- .x
+    for (v in names(.vals_list_2y)) {
+      rows <- which(tb$variable == v & tb$row_type == "label")
+      if (length(rows) > 0) {
+        tb$stat_0[rows] <- .vals_list_2y[[v]]$overall
+        tb$stat_1[rows] <- .vals_list_2y[[v]]$g1
+        tb$stat_2[rows] <- .vals_list_2y[[v]]$g2
+      }
+    }
+    tb %>% relocate(label, stat_0, stat_1, stat_2, p.value)
+  }) %>%
+  modify_header(label = "**Variabele**") %>%
+  modify_header(
+    stat_0 = "**Overall (N = {N})**",
+    stat_1 = "**2–3 available**",
+    stat_2 = "**4–5 available**"
+  ) %>%
+  bold_labels()
+
+# Step 5: Prepare 2–3 non-progressors vs 5-variable progressors
+prog_data_2y <- merged_data_base_2y %>%
+  filter(subgroup_progressiecompleetheid != "4–5 variables available (no progression)") %>%
+  mutate(
+    subgroup_progressiecompleetheid = factor(
+      subgroup_progressiecompleetheid,
+      levels = c(
+        "2–3 variables available (no progression)",
+        "Progression (5-variable composite)"
+      )
+    )
+  )
+
+.vals_list_2y_prog <- lapply(
+  setNames(.vars_t1_2y, .vars_t1_2y),
+  function(v) {
+    .get_grouped_t1_summaries(
+      prog_data_2y, v,
+      "subgroup_progressiecompleetheid", levels(prog_data_2y$subgroup_progressiecompleetheid),
+      digits = 1
+    )
+  }
+)
+
+tbl_23_nonprog_vs_prog_2y <- prog_data_2y %>%
+  dplyr::select(
+    geslacht, age_at_prev_visit, 
+    disease_duration_firstsymptoms,
+    prev_edss, prev_immuunMSmedicatie_type,
+    prev_psychofarmaca, prev_antidepressiva, prev_anxiolytica,
+    hads_angst, hads_depressie, hads_totaal,
+    subgroup_progressiecompleetheid
+  ) %>%
+  tbl_summary(
+    by = subgroup_progressiecompleetheid,
+    missing = "ifany",
+    statistic = list(
+      all_categorical() ~ "{n}/{N} ({p}%)",
+      all_continuous() ~ "{median} ({p25}, {p75})"
+    ),
+    type = list(prev_edss ~ "continuous")
+  ) %>%
+  add_overall() %>%
+  add_p(
+    test = list(
+      all_continuous() ~ kruskal.test,
+      all_categorical() ~ fisher.test
+    ),
+    test.args = all_categorical() ~ list(workspace = 2e8, simulate.p.value = TRUE, B = 1e5)
+  ) %>%
+  modify_table_body(~ {
+    tb <- .x
+    for (v in names(.vals_list_2y_prog)) {
+      rows <- which(tb$variable == v & tb$row_type == "label")
+      if (length(rows) > 0) {
+        tb$stat_0[rows] <- .vals_list_2y_prog[[v]]$overall
+        tb$stat_1[rows] <- .vals_list_2y_prog[[v]]$g1
+        tb$stat_2[rows] <- .vals_list_2y_prog[[v]]$g2
+      }
+    }
+    tb %>% relocate(label, stat_0, stat_1, stat_2, p.value)
+  }) %>%
+  modify_header(
+    stat_1 = "**2–3 available (no progression)**",
+    stat_2 = "**Progression**",
+    p.value = "**p-value**"
+  ) %>%
+  bold_labels()
+
+# Step 6: Merge tables
+baseline_table_merged_2y <- tbl_merge(
+  tbls = list(
+    tbl_nonprogression_23_vs_45_2y,
+    tbl_23_nonprog_vs_prog_2y
+  ),
+  tab_spanner = c(
+    "**Non-progression 2-year: 2–3 vs 4–5 available variables**",
+    "**2–3 non-progression vs 5-variable progression**"
+  )
+)
+
+baseline_table_merged_2y
+
+# Determine p-values of significance in HADS scores using post-hoc test 
+# on HADS in linear regression model (glm nb)
+# Comparing non-progressors with 2–3 vs 4–5 progression variables available vs progressors
+
+### 1. Fit Negative Binomial GLM
+ # --- 2–3 vs 4–5 non-progressors ---
+ m_angst_23_45_2y <- glm.nb(hads_angst ~ factor(subgroup_progressiecompleetheid), data = nonprog_data_2y)
+ m_depr_23_45_2y  <- glm.nb(hads_depressie ~ factor(subgroup_progressiecompleetheid), data = nonprog_data_2y)
+ m_tot_23_45_2y   <- glm.nb(hads_totaal ~ factor(subgroup_progressiecompleetheid), data = nonprog_data_2y)
+
+ # --- 2–3 non-progressors vs 5-variable progressors ---
+ m_angst_23_prog_2y <- glm.nb(hads_angst ~ factor(subgroup_progressiecompleetheid), data = prog_data_2y)
+ m_depr_23_prog_2y  <- glm.nb(hads_depressie ~ factor(subgroup_progressiecompleetheid), data = prog_data_2y)
+ m_tot_23_prog_2y   <- glm.nb(hads_totaal ~ factor(subgroup_progressiecompleetheid), data = prog_data_2y)
+
+### 2. Check model assumptions
+ # --- 2–3 vs 4–5 non-progressors ---
+ check_model(m_angst_23_45_2y)
+ check_model(m_depr_23_45_2y)
+ check_model(m_tot_23_45_2y)
+
+ # --- 2–3 non-progressors vs 5-variable progressors ---
+ check_model(m_angst_23_prog_2y)
+ check_model(m_depr_23_prog_2y)
+ check_model(m_tot_23_prog_2y)
+
+### 3. Post-hoc tests (pairwise Tukey)
+ # 2–3 vs 4–5 non-progressors
+  # HADS Anxiety
+  emm_angst_23_45_2y <- emmeans(m_angst_23_45_2y, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_angst_23_45_2y$contrasts
+
+  # HADS Depression
+  emm_depr_23_45_2y  <- emmeans(m_depr_23_45_2y, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_depr_23_45_2y$contrasts
+
+  # HADS Total
+  emm_tot_23_45_2y   <- emmeans(m_tot_23_45_2y, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_tot_23_45_2y$contrasts
+
+ # 2–3 non-progressors vs 5-variable progressors
+  # HADS Anxiety
+  emm_angst_23_prog_2y <- emmeans(m_angst_23_prog_2y, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_angst_23_prog_2y$contrasts
+
+  # HADS Depression
+  emm_depr_23_prog_2y  <- emmeans(m_depr_23_prog_2y, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_depr_23_prog_2y$contrasts
+
+  # HADS Total
+  emm_tot_23_prog_2y   <- emmeans(m_tot_23_prog_2y, pairwise ~ subgroup_progressiecompleetheid, adjust = "tukey")
+  emm_tot_23_prog_2y$contrasts
+
+  
+# Print group size
+ table(nonprog_data_2y$subgroup_progressiecompleetheid)
+ table(prog_data_2y$subgroup_progressiecompleetheid)
+    
 ##### Supplementary Table 2.CREATE BASELINE TABLE TO COMPARE PEOPLE WITH 2-3 AVAILABLE VARIABLES TO THOSE WITH 4-5 AVAILABLE VARIABLES WITHIN THE NON-PROGRESSION GROUP #####
 ###### YEAR 1. Supplementary Table 2 ######
 library(dplyr)
@@ -2187,33 +2725,26 @@ library(DHARMa)
 library(scales)
 
 ###### 1. Year 1 visualization and statistics ######
-
-# Convert prev_edss to an ordinal factor with specified levels
-merged_data_1F$prev_edss <- factor(merged_data_1F$prev_edss,
-                                   levels = c( 2.5, 3.0, 3.5, 4.0, 4.5, 5.0,
-                                               5.5, 6.0, 6.5, 7.0, 7.5, 8.0),
-                                   ordered = TRUE)
-
 # Create logistic regression models
-model1F1a <- glm(edss_progression ~ log10(hads_angst + 0.1) + offset(log10(age_at_prev_visit)), 
+model1F1a <- glm(edss_progression ~ log10(hads_angst + 0.1) + age_at_prev_visit, 
                  data = merged_data_1F, family = binomial())
-model1F1b <- glm(edss_progression ~ log10(hads_depressie + 0.1) + offset(log10(age_at_prev_visit)), 
+model1F1b <- glm(edss_progression ~ log10(hads_depressie + 0.1) + age_at_prev_visit, 
                  data = merged_data_1F, family = binomial())
-model1F1c <- glm(edss_progression ~ log10(hads_totaal+0.1) + offset(log10(age_at_prev_visit)), 
-                 data = merged_data_1F, family = binomial())
-
-model1F2a <- glm(progression_edss_or_T25FW_or_AMSQ ~ log10(hads_angst+0.1) + offset(log10(age_at_prev_visit)), 
-                 data = merged_data_1F, family = binomial())
-model1F2b <- glm(progression_edss_or_T25FW_or_AMSQ ~ log10(hads_depressie+0.1) + offset(log10(age_at_prev_visit)), 
-                 data = merged_data_1F, family = binomial())
-model1F2c <- glm(progression_edss_or_T25FW_or_AMSQ ~ log10(hads_totaal+0.1) + offset(log10(age_at_prev_visit)), 
+model1F1c <- glm(edss_progression ~ log10(hads_totaal+0.1) + age_at_prev_visit, 
                  data = merged_data_1F, family = binomial())
 
-model1F3a <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS ~ log10(hads_angst+0.1) + offset(log10(age_at_prev_visit)), 
+model1F2a <- glm(progression_edss_or_T25FW_or_AMSQ ~ log10(hads_angst+0.1) + age_at_prev_visit, 
                  data = merged_data_1F, family = binomial())
-model1F3b <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS ~ log10(hads_depressie+0.1) + offset(log10(age_at_prev_visit)), 
+model1F2b <- glm(progression_edss_or_T25FW_or_AMSQ ~ log10(hads_depressie+0.1) + age_at_prev_visit, 
                  data = merged_data_1F, family = binomial())
-model1F3c <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS ~ log10(hads_totaal+0.1) + offset(log10(age_at_prev_visit)), 
+model1F2c <- glm(progression_edss_or_T25FW_or_AMSQ ~ log10(hads_totaal+0.1) + age_at_prev_visit, 
+                 data = merged_data_1F, family = binomial())
+
+model1F3a <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS ~ log10(hads_angst+0.1) + age_at_prev_visit, 
+                 data = merged_data_1F, family = binomial())
+model1F3b <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS ~ log10(hads_depressie+0.1) + age_at_prev_visit, 
+                 data = merged_data_1F, family = binomial())
+model1F3c <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS ~ log10(hads_totaal+0.1) + age_at_prev_visit, 
                  data = merged_data_1F, family = binomial())
 
 # Check model assumptions and compare models
@@ -2342,25 +2873,25 @@ merged_data_1F_2y$prev_edss <- factor(merged_data_1F_2y$prev_edss,
                                       ordered = TRUE)
 
 # Create logistic regression models
-model1F5a <- glm(edss_progression_2 ~ log10(hads_angst+0.1) + offset(log10(age_at_prev_visit)), 
+model1F5a <- glm(edss_progression_2 ~ log10(hads_angst+0.1) + age_at_prev_visit, 
                  data = merged_data_1F_2y, family = binomial())
-model1F5b <- glm(edss_progression_2 ~ log10(hads_depressie+0.1) + offset(log10(age_at_prev_visit)), 
+model1F5b <- glm(edss_progression_2 ~ log10(hads_depressie+0.1) + age_at_prev_visit, 
                  data = merged_data_1F_2y, family = binomial())
-model1F5c <- glm(edss_progression_2 ~ log10(hads_totaal+0.1) + offset(log10(age_at_prev_visit)), 
-                 data = merged_data_1F_2y, family = binomial())
-
-model1F6a <- glm(progression_edss_or_T25FW_or_AMSQ_2y ~ log10(hads_angst+0.1) + offset(log10(age_at_prev_visit)), 
-                 data = merged_data_1F_2y, family = binomial())
-model1F6b <- glm(progression_edss_or_T25FW_or_AMSQ_2y ~ log10(hads_depressie+0.1) + offset(log10(age_at_prev_visit)), 
-                 data = merged_data_1F_2y, family = binomial())
-model1F6c <- glm(progression_edss_or_T25FW_or_AMSQ_2y ~ log10(hads_totaal+0.1) + offset(log10(age_at_prev_visit)), 
+model1F5c <- glm(edss_progression_2 ~ log10(hads_totaal+0.1) + age_at_prev_visit, 
                  data = merged_data_1F_2y, family = binomial())
 
-model1F7a <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y ~ log10(hads_angst+0.1) + offset(log10(age_at_prev_visit)), 
+model1F6a <- glm(progression_edss_or_T25FW_or_AMSQ_2y ~ log10(hads_angst+0.1) + age_at_prev_visit, 
                  data = merged_data_1F_2y, family = binomial())
-model1F7b <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y ~ log10(hads_depressie+0.1) + offset(log10(age_at_prev_visit)), 
+model1F6b <- glm(progression_edss_or_T25FW_or_AMSQ_2y ~ log10(hads_depressie+0.1) + age_at_prev_visit, 
                  data = merged_data_1F_2y, family = binomial())
-model1F7c <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y ~ log10(hads_totaal+0.1) + offset(log10(age_at_prev_visit)), 
+model1F6c <- glm(progression_edss_or_T25FW_or_AMSQ_2y ~ log10(hads_totaal+0.1) + age_at_prev_visit, 
+                 data = merged_data_1F_2y, family = binomial())
+
+model1F7a <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y ~ log10(hads_angst+0.1) + age_at_prev_visit, 
+                 data = merged_data_1F_2y, family = binomial())
+model1F7b <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y ~ log10(hads_depressie+0.1) + age_at_prev_visit, 
+                 data = merged_data_1F_2y, family = binomial())
+model1F7c <- glm(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y ~ log10(hads_totaal+0.1) + age_at_prev_visit, 
                  data = merged_data_1F_2y, family = binomial())
 
 # Check model assumptions and compare models
