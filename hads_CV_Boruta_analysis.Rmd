@@ -65,13 +65,6 @@ hads_2yr$progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y = as.factor(hads_2
 hads_2yr$geslacht = as.factor(hads_2yr$geslacht)
 ```
 
-Creating a subset for sensitivity analysis (13 patients with incomplete data were removed)
-```{r}
-ids = c("to_be_removed__patient_id")
-hads_1yr_sens = subset(hads_1yr, !hads_1yr$`Participant Id` %in% ids)
-hads_2yr_sens = subset(hads_2yr, !hads_2yr$`Participant Id` %in% ids)
-```
-
 ## step 3: logistic-regression prediction model
 
 ### cross-validation AUC
@@ -244,17 +237,6 @@ for (i in 1:length(combo)){
       cv_auc(hads_2yr, resp, predictors, B = 100, k = 5)
     }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
   }
-  
-  # ### for senstivity analysis without certain patients
-  #  if ("edss_progression" %in% responses){
-  #   results <- lapply(responses, function(resp) {
-  #     cv_auc(hads_1yr_sens, resp, predictors, B = 100, k = 5)
-  #   }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
-  # } else{
-  #   results <- lapply(responses, function(resp) {
-  #     cv_auc(hads_2yr_sens, resp, predictors, B = 100, k = 5)
-  #   }) # collapsing to unique "x" is not necessary a real warning, it's about duplicated FPR values
-  # }
   
   ## step 2: extract the performance metrics for supplementary
   perf_metrics_combined = bind_rows(lapply(results, function(x) x$perf_metrics))
