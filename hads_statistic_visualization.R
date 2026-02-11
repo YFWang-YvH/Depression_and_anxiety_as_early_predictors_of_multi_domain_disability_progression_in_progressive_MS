@@ -2461,6 +2461,770 @@ forestplot2y
 # Save using ggsave
 ggsave("figuren/forestplot2yv2.png", plot = forestplot2y, width = 5, height = 8, dpi = 900)
 
+#### Create pie charts as part of rebuttal analysis ####
+##### Add progression vs no progression pie charts #####
+make_progression_pie <- function(data, var, title_text) {
+  
+  df_plot <- data %>%
+    filter(!is.na(.data[[var]])) %>%
+    mutate(
+      progression = ifelse(.data[[var]] == 1, "Progression", "No progression")
+    ) %>%
+    count(progression) %>%
+    mutate(
+      fraction = n / sum(n),
+      label = paste0(n, "\n(", round(100 * fraction, 1), "%)")
+    )
+  
+  ggplot(df_plot, aes(x = "", y = fraction, fill = progression)) +
+    geom_col(width = 1, color = "white") +
+    coord_polar(theta = "y") +
+    scale_fill_manual(
+      values = c(
+        "No progression" = "#0072B2",
+        "Progression"    = "#E69F00"
+      )
+    ) +
+    geom_text(
+      aes(label = label),
+      position = position_stack(vjust = 0.5),
+      size = 4
+    ) +
+    labs(
+      title = title_text,
+      fill = NULL
+    ) +
+    theme_void() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.position = "bottom"
+    )
+}
+
+# 3var comp endpoint 1Y
+p1 <- make_progression_pie(
+  data = merged_data_1F,
+  var  = "progression_edss_or_T25FW_or_AMSQ",
+  title_text = "3-variable composite endpoint (1Y)"
+)
+
+# 5var comp endpoint 1Y
+p2 <- make_progression_pie(
+  data = merged_data_1F,
+  var  = "progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS",
+  title_text = "5-variable composite endpoint (1Y)"
+)
+
+# 3var comp endpoint 2Y
+p3 <- make_progression_pie(
+  data = merged_data_1F_2y,
+  var  = "progression_edss_or_T25FW_or_AMSQ_2y",
+  title_text = "3-variable composite endpoint (2Y)"
+)
+
+# 5var comp endpoint 2Y
+p4 <- make_progression_pie(
+  data = merged_data_1F_2y,
+  var  = "progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y",
+  title_text = "5-variable composite endpoint (2Y)"
+)
+
+# Save them using ggsave
+ggsave("figuren/piechart1y5var_nolabels_04022026.png", plot = p1, width = 8, height = 8, dpi = 300)
+ggsave("figuren/piechart1y3var_nolabels_04022026.png", plot = p2, width = 8, height = 8, dpi = 300)
+ggsave("figuren/piechart2y5var_nolabels_04022026.png", plot = p3, width = 8, height = 8, dpi = 300)  
+ggsave("figuren/piechart2y3var_nolabels_04022026.png", plot = p4, width = 8, height = 8, dpi = 300) 
+
+#### SENSITIVITY ANALYSIS 1: only people with complete data ####
+
+##### Make new datasets of only people with complete data at 1Y and 2Y #####
+vars_complete_1y <- c(
+  "prev_edss",
+  "next_edss",
+  "prev_T25FW",
+  "next_T25FW",
+  "prev_AMSQ_totaal",
+  "next_AMSQ_totaal",
+  "prev_SDMT",
+  "next_SDMT",
+  "prev_PDDS",
+  "next_PDDS"
+)
+
+merged_data_1F_complete <- merged_data_1F %>%
+  filter(
+    if_all(all_of(vars_complete_1y), ~ !is.na(.))
+  )
+
+vars_complete_2y <- c(
+  "prev_edss",
+  "next_edss_2",
+  "prev_T25FW",
+  "next_T25FW_2",
+  "prev_AMSQ_totaal",
+  "next_AMSQ_2_totaal",
+  "prev_SDMT",
+  "next_SDMT_2",
+  "prev_PDDS",
+  "next_PDDS_2"
+)
+
+merged_data_1F_2y_complete <- merged_data_1F_2y %>%
+  filter(
+    if_all(all_of(vars_complete_2y), ~ !is.na(.))
+  )
+
+# Check how many people are excluded now 
+n_distinct(merged_data_1F$`Participant Id`)
+n_distinct(merged_data_1F_complete$`Participant Id`)
+
+n_distinct(merged_data_1F_2y$`Participant Id`)
+n_distinct(merged_data_1F_2y_complete$`Participant Id`)
+
+# Export new datasets to Excel
+library(writexl)
+write_xlsx(
+  list(
+    merged_data_1F_complete     = merged_data_1F_complete,
+    merged_data_1F_2y_complete  = merged_data_1F_2y_complete
+  ),
+  path = "merged_data_complete.xlsx"
+)
+
+write_xlsx(
+  list(
+    merged_data_1F    = merged_data_1F,
+    merged_data_1F_2y  = merged_data_1F_2y
+  ),
+  path = "merged_data_04022026.xlsx"
+)
+
+#### Create 3-var and 5-var 1Y boxplots of only people with complete data (SENSITIVITY ANALYSIS) ####
+library(ggplot2)
+library(MASS)
+library(performance)
+library(emmeans)
+
+# Box plots of HADS scores vs EDSS or T25FW or AMSQ progression 1 year after completing HADS (NAs = not progressive)
+
+# Box plot HADS anxiety score vs EDSS or T25FW or AMSQ progressie after 1 year
+boxedss_T25FW_AMSQ1 <- ggplot(merged_data_1F_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ), y = hads_angst, fill = factor(progression_edss_or_T25FW_or_AMSQ))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (3var)")) +  
+  labs(x = "Progressie (1 jaar)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())  
+boxedss_T25FW_AMSQ1
+
+# Box plot HADS-depression score vs EDSS or T25FW or AMSQ progression after 1 year
+boxedss_T25FW_AMSQ2 <- ggplot(merged_data_1F_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ), y = hads_depressie, fill = factor(progression_edss_or_T25FW_or_AMSQ))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (3var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ2
+
+# Box plot total HADS score vs EDSS or T25FW or AMSQ progression after 1 year
+boxedss_T25FW_AMSQ3 <- ggplot(merged_data_1F_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ), y = hads_totaal, fill = factor(progression_edss_or_T25FW_or_AMSQ))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (3var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ3
+
+# Number of people in each group
+table(merged_data_1F_complete$progression_edss_or_T25FW_or_AMSQ)
+
+# Summarizing statsitics per group 
+stats_summary <- merged_data_1F_complete %>%
+  group_by(progression_edss_or_T25FW_or_AMSQ) %>%
+  summarise(
+    n = n(),
+    median_hads_angst = median(hads_angst, na.rm = TRUE),
+    Q1_hads_angst = quantile(hads_angst, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_angst = quantile(hads_angst, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_depressie = median(hads_depressie, na.rm = TRUE),
+    Q1_hads_depressie = quantile(hads_depressie, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_depressie = quantile(hads_depressie, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_totaal = median(hads_totaal, na.rm = TRUE),
+    Q1_hads_totaal = quantile(hads_totaal, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_totaal = quantile(hads_totaal, probs = 0.75, na.rm = TRUE, type = 1)
+  )
+
+print(stats_summary, width = Inf)
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_3varcomp <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_or_AMSQ), data = merged_data_1F_complete)
+m_depr_nb_3varcomp  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_or_AMSQ), data = merged_data_1F_complete)
+m_tot_nb_3varcomp   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_or_AMSQ), data = merged_data_1F_complete)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_3varcomp)
+check_model(m_depr_nb_3varcomp)
+check_model(m_tot_nb_3varcomp)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correctie)
+# HADS Anxiety
+emm_angst_nb_3varcomp <- emmeans(m_angst_nb_3varcomp, pairwise ~ progression_edss_or_T25FW_or_AMSQ, adjust = "tukey")
+emm_angst_nb_3varcomp$contrasts
+
+# HADS Depression
+emm_depr_nb_3varcomp <- emmeans(m_depr_nb_3varcomp, pairwise ~ progression_edss_or_T25FW_or_AMSQ, adjust = "tukey")
+emm_depr_nb_3varcomp$contrasts
+
+# HADS Total
+emm_tot_nb_3varcomp <- emmeans(m_tot_nb_3varcomp, pairwise ~ progression_edss_or_T25FW_or_AMSQ, adjust = "tukey")
+emm_tot_nb_3varcomp$contrasts
+
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_AMSQ_completedata_04022026.png", plot = boxedss_T25FW_AMSQ1, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_AMSQ_completedata_04022026.png", plot = boxedss_T25FW_AMSQ2, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_AMSQ_completedata_04022026.png", plot = boxedss_T25FW_AMSQ3, width = 5, height = 4, dpi = 300)  
+
+
+# Box plots of HADS scores vs EDSS, T25FW, AMSQ, SDMT or PDDS progressie 1 year after completing HADS (NAs = not progressive)
+
+# Box plot HADS anxiety score vs progression after 1 year
+boxedss_T25FW_AMSQ_SDMT_PDDS1 <- ggplot(merged_data_1F_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS), y = hads_angst, fill = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (5var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ_SDMT_PDDS1
+
+# Box plot HADS depression score vs progression after 1 year
+boxedss_T25FW_AMSQ_SDMT_PDDS2 <- ggplot(merged_data_1F_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS), y = hads_depressie, fill = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (5var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ_SDMT_PDDS2 
+
+# Box plot total HADS score vs progression after 1 year
+boxedss_T25FW_AMSQ_SDMT_PDDS3 <- ggplot(merged_data_1F_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS), y = hads_totaal, fill = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (5var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ_SDMT_PDDS3
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_5varcomp <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS), data = merged_data_1F_complete)
+m_depr_nb_5varcomp  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS), data = merged_data_1F_complete)
+m_tot_nb_5varcomp   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS), data = merged_data_1F_complete)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_5varcomp)
+check_model(m_depr_nb_5varcomp)
+check_model(m_tot_nb_5varcomp)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+# HADS Anxiety
+emm_angst_nb_5varcomp <- emmeans(m_angst_nb_5varcomp, pairwise ~ progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS, adjust = "tukey")
+emm_angst_nb_5varcomp$contrasts
+
+# HADS Depression
+emm_depr_nb_5varcomp <- emmeans(m_depr_nb_5varcomp, pairwise ~ progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS, adjust = "tukey")
+emm_depr_nb_5varcomp$contrasts
+
+# HADS Total
+emm_tot_nb_5varcomp <- emmeans(m_tot_nb_5varcomp, pairwise ~ progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS, adjust = "tukey")
+emm_tot_nb_5varcomp$contrasts
+
+# Number of people in each group
+table(merged_data_1F_complete$progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS)
+
+# Summarizing statistics per group with explicit Q1 en Q3
+stats_summary <- merged_data_1F_complete %>%
+  group_by(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS) %>%
+  summarise(
+    n = n(),
+    
+    median_hads_angst = median(hads_angst, na.rm = TRUE),
+    Q1_hads_angst = quantile(hads_angst, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_angst = quantile(hads_angst, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_depressie = median(hads_depressie, na.rm = TRUE),
+    Q1_hads_depressie = quantile(hads_depressie, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_depressie = quantile(hads_depressie, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_totaal = median(hads_totaal, na.rm = TRUE),
+    Q1_hads_totaal = quantile(hads_totaal, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_totaal = quantile(hads_totaal, probs = 0.75, na.rm = TRUE, type = 1)
+  )
+
+print(stats_summary, width = Inf)  
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_AMSQ_SDMT_PDDS_completedata_04022026.png", plot = boxedss_T25FW_AMSQ_SDMT_PDDS1, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_AMSQ_SDMT_PDDS_completedata_04022026.png", plot = boxedss_T25FW_AMSQ_SDMT_PDDS2, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_AMSQ_SDMT_PDDS_completedata_04022026.png", plot = boxedss_T25FW_AMSQ_SDMT_PDDS3, width = 5, height = 4, dpi = 300)      
+
+
+#### Create 3-var and 5-var 2Y boxplots of only people with complete data ####
+
+# Box plots of HADS scores vs EDSS or T25FW or AMSQ progression 2 years after completing HADS (NAs = not progressive)
+# Boxplot HADS anxiety vs EDSS or T25FW or AMSQ progression 2 years after completing HADS 
+boxedss_T25FW_AMSQ1_2y <- ggplot(merged_data_1F_2y_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_2y), y = hads_angst, fill = factor(progression_edss_or_T25FW_or_AMSQ_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie")) +
+  labs(x = "Progressie (EDSS of T25FW of AMSQ, 2 jaar)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ1_2y
+
+# Boxplot HADS depression vs EDSS or T25FW or AMSQ progression 2 years after completing HADS 
+boxedss_T25FW_AMSQ2_2y <- ggplot(merged_data_1F_2y_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_2y), y = hads_depressie, fill = factor(progression_edss_or_T25FW_or_AMSQ_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie")) +
+  labs(x = "Progressie (EDSS of T25FW of AMSQ, 2 jaar)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ2_2y
+
+# Boxplot HADS total vs EDSS or T25FW or AMSQ progression 2 years after completing HADS 
+boxedss_T25FW_AMSQ3_2y <- ggplot(merged_data_1F_2y_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_2y), y = hads_totaal, fill = factor(progression_edss_or_T25FW_or_AMSQ_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie")) +
+  labs(x = "Progressie (EDSS of T25FW of AMSQ, 2 jaar)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ3_2y
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_3varcomp_2y <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_or_AMSQ_2y), data = merged_data_1F_2y_complete)
+m_depr_nb_3varcomp_2y  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_or_AMSQ_2y), data = merged_data_1F_2y_complete)
+m_tot_nb_3varcomp_2y   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_or_AMSQ_2y), data = merged_data_1F_2y_complete)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_3varcomp_2y)
+check_model(m_depr_nb_3varcomp_2y)
+check_model(m_tot_nb_3varcomp_2y)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+# HADS Anxiety
+emm_angst_nb_3varcomp_2y <- emmeans(m_angst_nb_3varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_AMSQ_2y, adjust = "tukey")
+emm_angst_nb_3varcomp_2y$contrasts
+
+# HADS Depression
+emm_depr_nb_3varcomp_2y <- emmeans(m_depr_nb_3varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_AMSQ_2y, adjust = "tukey")
+emm_depr_nb_3varcomp_2y$contrasts
+
+# HADS Total
+emm_tot_nb_3varcomp_2y <- emmeans(m_tot_nb_3varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_AMSQ_2y, adjust = "tukey")
+emm_tot_nb_3varcomp_2y$contrasts
+
+
+# Print group size
+table(merged_data_1F_2y_complete$progression_edss_or_T25FW_or_AMSQ_2y)
+
+merged_data_1F_2y_complete %>%
+  count(progression_edss_or_T25FW_or_AMSQ_2y, sort = TRUE, name = "Aantal") %>%
+  rename(Group = progression_edss_or_T25FW_or_AMSQ_2y) %>%
+  print()
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_AMSQ_2y_completedata_04022026.png", plot = boxedss_T25FW_AMSQ1_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_AMSQ_2y_completedata_04022026.png", plot = boxedss_T25FW_AMSQ2_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_AMSQ_2y_completedata_04022026.png", plot = boxedss_T25FW_AMSQ3_2y, width = 5, height = 4, dpi = 300)      
+
+# Box plots of HADS scores vs progression EDSS or T25FW or AMSQ or SDMT or PDDS 2 years after completing HADS (NAs = not progressive)
+
+# Boxplot HADS anxiety
+boxedss_T25FW_AMSQ_SDMT_PDDS1_2y <- ggplot(merged_data_1F_2y_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y), y = hads_angst, fill = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"),
+                    labels = c("Geen Progressie", "Progressie (5vars)")) +
+  labs(x = "Progressie (5vars)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ_SDMT_PDDS1_2y
+
+# Boxplot HADS depression
+boxedss_T25FW_AMSQ_SDMT_PDDS2_2y <- ggplot(merged_data_1F_2y_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y), y = hads_depressie, fill = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"),
+                    labels = c("Geen Progressie", "Progressie (5vars)")) +
+  labs(x = "Progressie (5vars)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ_SDMT_PDDS2_2y
+
+# Boxplot HADS total
+boxedss_T25FW_AMSQ_SDMT_PDDS3_2y <- ggplot(merged_data_1F_2y_complete, aes(x = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y), y = hads_totaal, fill = factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"),
+                    labels = c("Geen Progressie", "Progressie (5vars)")) +
+  labs(x = "Progressie (5vars)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_AMSQ_SDMT_PDDS3_2y
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_5varcomp_2y <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y), data = merged_data_1F_2y_complete)
+m_depr_nb_5varcomp_2y  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y), data = merged_data_1F_2y_complete)
+m_tot_nb_5varcomp_2y   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y), data = merged_data_1F_2y_complete)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_5varcomp_2y)
+check_model(m_depr_nb_5varcomp_2y)
+check_model(m_tot_nb_5varcomp_2y)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+# HADS Anxiety
+emm_angst_nb_5varcomp_2y <- emmeans(m_angst_nb_5varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y, adjust = "tukey")
+emm_angst_nb_5varcomp_2y$contrasts
+
+# HADS Depression
+emm_depr_nb_5varcomp_2y <- emmeans(m_depr_nb_5varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y, adjust = "tukey")
+emm_depr_nb_5varcomp_2y$contrasts
+
+# HADS Total
+emm_tot_nb_5varcomp_2y <- emmeans(m_tot_nb_5varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y, adjust = "tukey")
+emm_tot_nb_5varcomp_2y$contrasts
+
+# Print group size
+table(merged_data_1F_2y_complete$progression_edss_or_T25FW_or_AMSQ_or_SDMT_or_PDDS_2y)
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_AMSQ_SDMT_PDDS_2y_completedata_04022026.png", plot = boxedss_T25FW_AMSQ_SDMT_PDDS1_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_AMSQ_SDMT_PDDS_2y_completedata_04022026.png", plot = boxedss_T25FW_AMSQ_SDMT_PDDS2_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_AMSQ_SDMT_PDDS_2y_completedata_04022026.png", plot = boxedss_T25FW_AMSQ_SDMT_PDDS3_2y, width = 5, height = 4, dpi = 300)      
+
+#### SENSITIVITY ANALYSIS 2: composite progression endpoints without AMSQ ####
+
+##### 1Y 2var comp #####
+
+# Box plots of HADS scores vs EDSS or T25FW progression 1 year after completing HADS (NAs = not progressive)
+
+# Box plot HADS anxiety score vs EDSS or T25FW progression after 1 year
+boxedss_T25FW_1 <- ggplot(merged_data_1F, aes(x = factor(progression_edss_or_T25FW), y = hads_angst, fill = factor(progression_edss_or_T25FW))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (2var)")) +  
+  labs(x = "Progressie (1 jaar)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())  
+boxedss_T25FW_1
+
+# Box plot HADS-depression score vs EDSS or T25FW progression after 1 year
+boxedss_T25FW_2 <- ggplot(merged_data_1F, aes(x = factor(progression_edss_or_T25FW), y = hads_depressie, fill = factor(progression_edss_or_T25FW))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (2var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_2
+
+# Box plot total HADS score vs EDSS or T25FW progression after 1 year
+boxedss_T25FW_3 <- ggplot(merged_data_1F, aes(x = factor(progression_edss_or_T25FW), y = hads_totaal, fill = factor(progression_edss_or_T25FW))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (2var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_3
+
+# Number of people in each group
+table(merged_data_1F$progression_edss_or_T25FW)
+
+# Summarizing statsitics per group 
+stats_summary <- merged_data_1F %>%
+  group_by(progression_edss_or_T25FW) %>%
+  summarise(
+    n = n(),
+    median_hads_angst = median(hads_angst, na.rm = TRUE),
+    Q1_hads_angst = quantile(hads_angst, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_angst = quantile(hads_angst, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_depressie = median(hads_depressie, na.rm = TRUE),
+    Q1_hads_depressie = quantile(hads_depressie, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_depressie = quantile(hads_depressie, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_totaal = median(hads_totaal, na.rm = TRUE),
+    Q1_hads_totaal = quantile(hads_totaal, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_totaal = quantile(hads_totaal, probs = 0.75, na.rm = TRUE, type = 1)
+  )
+
+print(stats_summary, width = Inf)
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_2varcomp <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW), data = merged_data_1F)
+m_depr_nb_2varcomp  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW), data = merged_data_1F)
+m_tot_nb_2varcomp   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW), data = merged_data_1F)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_2varcomp)
+check_model(m_depr_nb_2varcomp)
+check_model(m_tot_nb_2varcomp)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correctie)
+# HADS Anxiety
+emm_angst_nb_2varcomp <- emmeans(m_angst_nb_2varcomp, pairwise ~ progression_edss_or_T25FW, adjust = "tukey")
+emm_angst_nb_2varcomp$contrasts
+
+# HADS Depression
+emm_depr_nb_2varcomp <- emmeans(m_depr_nb_2varcomp, pairwise ~ progression_edss_or_T25FW, adjust = "tukey")
+emm_depr_nb_2varcomp$contrasts
+
+# HADS Total
+emm_tot_nb_2varcomp <- emmeans(m_tot_nb_2varcomp, pairwise ~ progression_edss_or_T25FW, adjust = "tukey")
+emm_tot_nb_2varcomp$contrasts
+
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_05022026.png", plot = boxedss_T25FW_1, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_05022026.png", plot = boxedss_T25FW_2, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_05022026.png", plot = boxedss_T25FW_3, width = 5, height = 4, dpi = 300)  
+
+##### 1Y 4var comp #####
+
+# Box plots of HADS scores vs EDSS, T25FW, SDMT or PDDS progression 1 year after completing HADS (NAs = not progressive)
+
+# Box plot HADS anxiety score vs progression after 1 year
+boxedss_T25FW_SDMT_PDDS1 <- ggplot(merged_data_1F, aes(x = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS), y = hads_angst, fill = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (4var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_SDMT_PDDS1
+
+# Box plot HADS depression score vs progression after 1 year
+boxedss_T25FW_SDMT_PDDS2 <- ggplot(merged_data_1F, aes(x = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS), y = hads_depressie, fill = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (4var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_SDMT_PDDS2 
+
+# Box plot total HADS score vs progression after 1 year
+boxedss_T25FW_SDMT_PDDS3 <- ggplot(merged_data_1F, aes(x = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS), y = hads_totaal, fill = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie (4var)")) +
+  labs(x = "Progressie (1 jaar)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_SDMT_PDDS3
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_4varcomp <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_or_SDMT_or_PDDS), data = merged_data_1F)
+m_depr_nb_4varcomp  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_or_SDMT_or_PDDS), data = merged_data_1F)
+m_tot_nb_4varcomp   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_or_SDMT_or_PDDS), data = merged_data_1F)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_4varcomp)
+check_model(m_depr_nb_4varcomp)
+check_model(m_tot_nb_4varcomp)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+# HADS Anxiety
+emm_angst_nb_4varcomp <- emmeans(m_angst_nb_4varcomp, pairwise ~ progression_edss_or_T25FW_or_SDMT_or_PDDS, adjust = "tukey")
+emm_angst_nb_4varcomp$contrasts
+
+# HADS Depression
+emm_depr_nb_4varcomp <- emmeans(m_depr_nb_4varcomp, pairwise ~ progression_edss_or_T25FW_or_SDMT_or_PDDS, adjust = "tukey")
+emm_depr_nb_4varcomp$contrasts
+
+# HADS Total
+emm_tot_nb_4varcomp <- emmeans(m_tot_nb_4varcomp, pairwise ~ progression_edss_or_T25FW_or_SDMT_or_PDDS, adjust = "tukey")
+emm_tot_nb_4varcomp$contrasts
+
+# Number of people in each group
+table(merged_data_1F$progression_edss_or_T25FW_or_SDMT_or_PDDS)
+
+# Summarizing statistics per group with explicit Q1 en Q3
+stats_summary <- merged_data_1F %>%
+  group_by(progression_edss_or_T25FW_or_SDMT_or_PDDS) %>%
+  summarise(
+    n = n(),
+    
+    median_hads_angst = median(hads_angst, na.rm = TRUE),
+    Q1_hads_angst = quantile(hads_angst, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_angst = quantile(hads_angst, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_depressie = median(hads_depressie, na.rm = TRUE),
+    Q1_hads_depressie = quantile(hads_depressie, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_depressie = quantile(hads_depressie, probs = 0.75, na.rm = TRUE, type = 1),
+    
+    median_hads_totaal = median(hads_totaal, na.rm = TRUE),
+    Q1_hads_totaal = quantile(hads_totaal, probs = 0.25, na.rm = TRUE, type = 1),
+    Q3_hads_totaal = quantile(hads_totaal, probs = 0.75, na.rm = TRUE, type = 1)
+  )
+
+print(stats_summary, width = Inf)  
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_SDMT_PDDS_05022026.png", plot = boxedss_T25FW_SDMT_PDDS1, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_SDMT_PDDS_05022026.png", plot = boxedss_T25FW_SDMT_PDDS2, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_SDMT_PDDS_05022026.png", plot = boxedss_T25FW_SDMT_PDDS3, width = 5, height = 4, dpi = 300)      
+
+##### 2Y 2var comp #####
+
+# Box plots of HADS scores vs EDSS or T25FW progression 2 years after completing HADS (NAs = not progressive)
+# Boxplot HADS anxiety vs EDSS or T25FW progression 2 years after completing HADS 
+boxedss_T25FW_1_2y <- ggplot(merged_data_1F_2y, aes(x = factor(progression_edss_or_T25FW_2y), y = hads_angst, fill = factor(progression_edss_or_T25FW_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie")) +
+  labs(x = "Progressie (EDSS of T25FW, 2 jaar)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_1_2y
+
+# Boxplot HADS depression vs EDSS or T25FW progression 2 years after completing HADS 
+boxedss_T25FW_2_2y <- ggplot(merged_data_1F_2y, aes(x = factor(progression_edss_or_T25FW_2y), y = hads_depressie, fill = factor(progression_edss_or_T25FW_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie")) +
+  labs(x = "Progressie (EDSS of T25FW, 2 jaar)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_2_2y
+
+# Boxplot HADS total vs EDSS or T25FW progression 2 years after completing HADS 
+boxedss_T25FW_3_2y <- ggplot(merged_data_1F_2y, aes(x = factor(progression_edss_or_T25FW_2y), y = hads_totaal, fill = factor(progression_edss_or_T25FW_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"), 
+                    labels = c("Geen Progressie", "Progressie")) +
+  labs(x = "Progressie (EDSS of T25FW, 2 jaar)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_3_2y
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_2varcomp_2y <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_2y), data = merged_data_1F_2y)
+m_depr_nb_2varcomp_2y  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_2y), data = merged_data_1F_2y)
+m_tot_nb_2varcomp_2y   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_2y), data = merged_data_1F_2y)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_2varcomp_2y)
+check_model(m_depr_nb_2varcomp_2y)
+check_model(m_tot_nb_2varcomp_2y)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+# HADS Anxiety
+emm_angst_nb_2varcomp_2y <- emmeans(m_angst_nb_2varcomp_2y, pairwise ~ progression_edss_or_T25FW_2y, adjust = "tukey")
+emm_angst_nb_2varcomp_2y$contrasts
+
+# HADS Depression
+emm_depr_nb_2varcomp_2y <- emmeans(m_depr_nb_2varcomp_2y, pairwise ~ progression_edss_or_T25FW_2y, adjust = "tukey")
+emm_depr_nb_2varcomp_2y$contrasts
+
+# HADS Total
+emm_tot_nb_2varcomp_2y <- emmeans(m_tot_nb_2varcomp_2y, pairwise ~ progression_edss_or_T25FW_2y, adjust = "tukey")
+emm_tot_nb_2varcomp_2y$contrasts
+
+
+# Print group size
+table(merged_data_1F_2y$progression_edss_or_T25FW_2y)
+
+merged_data_1F_2y %>%
+  count(progression_edss_or_T25FW_2y, sort = TRUE, name = "Aantal") %>%
+  rename(Group = progression_edss_or_T25FW_2y) %>%
+  print()
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_2y_05022026.png", plot = boxedss_T25FW_1_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_2y_05022026.png", plot = boxedss_T25FW_2_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_2y_05022026.png", plot = boxedss_T25FW_3_2y, width = 5, height = 4, dpi = 300)      
+
+##### 2Y 4var comp #####
+
+# Box plots of HADS scores vs progression EDSS or T25FW or SDMT or PDDS 2 years after completing HADS (NAs = not progressive)
+
+# Boxplot HADS anxiety
+boxedss_T25FW_SDMT_PDDS1_2y <- ggplot(merged_data_1F_2y, aes(x = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y), y = hads_angst, fill = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"),
+                    labels = c("Geen Progressie", "Progressie (4vars)")) +
+  labs(x = "Progressie (4vars)", y = "HADS Angst Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_SDMT_PDDS1_2y
+
+# Boxplot HADS depression
+boxedss_T25FW_SDMT_PDDS2_2y <- ggplot(merged_data_1F_2y, aes(x = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y), y = hads_depressie, fill = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"),
+                    labels = c("Geen Progressie", "Progressie (4vars)")) +
+  labs(x = "Progressie (4vars)", y = "HADS Depressie Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_SDMT_PDDS2_2y
+
+# Boxplot HADS total
+boxedss_T25FW_SDMT_PDDS3_2y <- ggplot(merged_data_1F_2y, aes(x = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y), y = hads_totaal, fill = factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#0072B2", "#E69F00"),
+                    labels = c("Geen Progressie", "Progressie (4vars)")) +
+  labs(x = "Progressie (4vars)", y = "HADS Totaal Score") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+boxedss_T25FW_SDMT_PDDS3_2y
+
+# Determine p-values of significance of differences in HADS scores using post-hoc test on HADS in LINEAIR regression model (glm nb)
+### 1. Fit Negative Binomial GLM
+m_angst_nb_4varcomp_2y <- glm.nb(hads_angst ~ factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y), data = merged_data_1F_2y)
+m_depr_nb_4varcomp_2y  <- glm.nb(hads_depressie ~ factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y), data = merged_data_1F_2y)
+m_tot_nb_4varcomp_2y   <- glm.nb(hads_totaal ~ factor(progression_edss_or_T25FW_or_SDMT_or_PDDS_2y), data = merged_data_1F_2y)
+
+### 2. Check model assumptions
+check_model(m_angst_nb_4varcomp_2y)
+check_model(m_depr_nb_4varcomp_2y)
+check_model(m_tot_nb_4varcomp_2y)
+
+### 3. Post-hoc test using emmeans (pairwise, Tukey correction)
+# HADS Anxiety
+emm_angst_nb_4varcomp_2y <- emmeans(m_angst_nb_4varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_SDMT_or_PDDS_2y, adjust = "tukey")
+emm_angst_nb_4varcomp_2y$contrasts
+
+# HADS Depression
+emm_depr_nb_4varcomp_2y <- emmeans(m_depr_nb_4varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_SDMT_or_PDDS_2y, adjust = "tukey")
+emm_depr_nb_4varcomp_2y$contrasts
+
+# HADS Total
+emm_tot_nb_4varcomp_2y <- emmeans(m_tot_nb_4varcomp_2y, pairwise ~ progression_edss_or_T25FW_or_SDMT_or_PDDS_2y, adjust = "tukey")
+emm_tot_nb_4varcomp_2y$contrasts
+
+# Print group size
+table(merged_data_1F_2y$progression_edss_or_T25FW_or_SDMT_or_PDDS_2y)
+
+# Save using ggsave
+ggsave("figuren/boxplot_hads_angst_vs_edss_T25FW_SDMT_PDDS_2y_05022026.png", plot = boxedss_T25FW_SDMT_PDDS1_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_depressie_vs_edss_T25FW_SDMT_PDDS_2y_05022026.png", plot = boxedss_T25FW_SDMT_PDDS2_2y, width = 5, height = 4, dpi = 300)
+ggsave("figuren/boxplot_hads_totaal_vs_edss_T25FW_SDMT_PDDS_2y_05022026.png", plot = boxedss_T25FW_SDMT_PDDS3_2y, width = 5, height = 4, dpi = 300)      
+
 
 #### EXPORT ENVIRONMENT ####
 # remove everything from environment at the end
