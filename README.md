@@ -1,3 +1,5 @@
+This repository contains scripts used to analyze the clinical data, as publiched in Journal of Neurology - Symptoms of depression and anxiety are early predictors of multi-domain disability progression in progressive MS (doi: https://doi.org/10.1007/s00415-026-13701-8)
+
 # **Project: Symptoms of depression and anxiety are early predictors of multi-domain disability progression in progressive MS**
 
 **Project background**
